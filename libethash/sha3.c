@@ -94,8 +94,8 @@ mkapply_ds(xorin, dst[i] ^= src[i])      // xorin
     }
 
     /** The sponge-based hash construction. **/
-    static inline int hash(
-        uint8_t* out, size_t outlen, const uint8_t* in, size_t inlen, size_t rate)
+    static inline int hash_32(
+        uint8_t* out, const uint8_t* in, size_t inlen, size_t rate)
 {
     if ((out == NULL) || ((in == NULL) && inlen != 0) )
     {
@@ -112,21 +112,47 @@ mkapply_ds(xorin, dst[i] ^= src[i])      // xorin
     // Apply P
     P(a);
     // Squeeze output.
+    size_t outlen = 32;
     foldP(out, outlen, setout);
-    setout(a, out, outlen);
+    setout(a, out, 32);
     memset(a, 0, 200);
     return 0;
 }
 
+    /** The sponge-based hash construction. **/
+    static inline int hash_64(
+        uint8_t* out, const uint8_t* in, size_t inlen, size_t rate)
+{
+    if ((out == NULL) || ((in == NULL) && inlen != 0) )
+    {
+        return -1;
+    }
+    uint8_t a[Plen] = {0};
+    // Absorb input.
+    foldP(in, inlen, xorin);
+    // Xor in the DS and pad frame.
+    a[inlen] ^= 0x01;
+    a[rate - 1] ^= 0x80;
+    // Xor in the last block.
+    xorin(a, in, inlen);
+    // Apply P
+    P(a);
+    // Squeeze output.
+    size_t outlen = 64;
 
+    foldP(out, outlen, setout);
+    setout(a, out, 64);
+    memset(a, 0, 200);
+    return 0;
+}
 inline    int sha3_256(uint8_t* out, const uint8_t* in, size_t inlen)
 {    
-    return hash(out, 32, in, inlen, 136);
+    return hash_32(out, in, inlen, 136);
 }
 
 inline    int sha3_512(uint8_t* out, const uint8_t* in, size_t inlen)
 {
-    return hash(out, 64, in, inlen, 72);
+    return hash_64(out, in, inlen, 72);
 }
 
 

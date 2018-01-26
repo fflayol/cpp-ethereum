@@ -67,10 +67,10 @@ static bool ethash_compute_cache_nodes(
 	}
 	uint32_t const num_nodes = (uint32_t) (cache_size / sizeof(node));
 
-	SHA3_512(nodes[0].bytes, (uint8_t*)seed, 32);
+	SHA3_512_32(nodes[0].bytes, (uint8_t*)seed);
 
 	for (uint32_t i = 1; i != num_nodes; ++i) {
-		SHA3_512(nodes[i].bytes, nodes[i - 1].bytes, 64);
+		SHA3_512_64(nodes[i].bytes, nodes[i - 1].bytes);
 	}
 
 	for (uint32_t j = 0; j != ETHASH_CACHE_ROUNDS; j++) {
@@ -185,7 +185,6 @@ bool ethash_compute_full_data(
 static bool ethash_hash(
 	ethash_return_value_t* ret,
 	node const* full_nodes,
-	ethash_light_t const light,
 	uint64_t full_size,
 	ethash_h256_t const header_hash,
 	uint64_t const nonce
@@ -202,7 +201,7 @@ static bool ethash_hash(
 	fix_endian64(s_mix[0].double_words[4], nonce);
 
 	// compute sha3-512 hash and replicate across mix
-	SHA3_512(s_mix->bytes, s_mix->bytes, 40);
+	SHA3_512_40(s_mix->bytes, s_mix->bytes);
 	fix_endian_arr32(s_mix[0].words, 16);
 
 	node* const mix = s_mix + 1;
@@ -215,16 +214,10 @@ static bool ethash_hash(
 
 	for (unsigned i = 0; i != ETHASH_ACCESSES; ++i) {
 		uint32_t const index = fnv_hash(s_mix->words[0] ^ i, mix->words[i % MIX_WORDS]) % num_full_pages;
-
+        unsigned preindex = MIX_NODES * index ;
 		for (unsigned n = 0; n != MIX_NODES; ++n) {
 			node const* dag_node;
-			node tmp_node;
-			if (full_nodes) {
-				dag_node = &full_nodes[MIX_NODES * index + n];
-			} else {
-				ethash_calculate_dag_item(&tmp_node, index * MIX_NODES + n, light);
-				dag_node = &tmp_node;
-			}
+			dag_node = &full_nodes[preindex++];			
 
 #if defined(_M_X64) && ENABLE_SSE
 			{
@@ -256,6 +249,9 @@ static bool ethash_hash(
 		}
 
 	}
+
+
+	
 
 // Workaround for a GCC regression which causes a bogus -Warray-bounds warning.
 // The regression was introduced in GCC 4.8.4, fixed in GCC 5.0.0 and backported to GCC 4.9.3 but
@@ -289,9 +285,111 @@ static bool ethash_hash(
 	fix_endian_arr32(mix->words, MIX_WORDS / 4);
 	memcpy(&ret->mix_hash, mix->bytes, 32);
 	// final Keccak hash
-	SHA3_256(&ret->result, s_mix->bytes, 64 + 32); // Keccak-256(s + compressed_mix)
+	SHA3_256_96(&ret->result, s_mix->bytes); // Keccak-256(s + compressed_mix)
 	return true;
 }
+
+
+/*
+Specialized function ethash_hash
+*/
+static bool ethash_hash_nonode(
+	ethash_return_value_t* ret,
+	ethash_light_t const light,
+	uint64_t full_size,
+	ethash_h256_t const header_hash,
+	uint64_t const nonce
+)
+{
+	if (full_size % MIX_WORDS != 0) {
+		return false;
+	}
+
+	// pack hash and nonce together into first 40 bytes of s_mix
+	assert(sizeof(node) * 8 == 512);
+	node s_mix[MIX_NODES + 1];
+	memcpy(s_mix[0].bytes, &header_hash, 32);
+	fix_endian64(s_mix[0].double_words[4], nonce);
+
+	// compute sha3-512 hash and replicate across mix
+	SHA3_512_40(s_mix->bytes, s_mix->bytes);
+	fix_endian_arr32(s_mix[0].words, 16);
+
+	node* const mix = s_mix + 1;
+	for (uint32_t w = 0; w != MIX_WORDS; ++w) {
+		mix->words[w] = s_mix[0].words[w % NODE_WORDS];
+	}
+
+	unsigned const page_size = sizeof(uint32_t) * MIX_WORDS;
+	unsigned const num_full_pages = (unsigned) (full_size / page_size);
+
+	for (unsigned i = 0; i != ETHASH_ACCESSES; ++i) {
+		uint32_t const index = fnv_hash(s_mix->words[0] ^ i, mix->words[i % MIX_WORDS]) % num_full_pages;
+
+		for (unsigned n = 0; n != MIX_NODES; ++n) {
+			node const* dag_node;
+			node tmp_node;
+			
+			ethash_calculate_dag_item(&tmp_node, index * MIX_NODES + n, light);
+			dag_node = &tmp_node;
+			
+
+#if defined(_M_X64) && ENABLE_SSE
+			{
+				__m128i fnv_prime = _mm_set1_epi32(FNV_PRIME);
+				__m128i xmm0 = _mm_mullo_epi32(fnv_prime, mix[n].xmm[0]);
+				__m128i xmm1 = _mm_mullo_epi32(fnv_prime, mix[n].xmm[1]);
+				__m128i xmm2 = _mm_mullo_epi32(fnv_prime, mix[n].xmm[2]);
+				__m128i xmm3 = _mm_mullo_epi32(fnv_prime, mix[n].xmm[3]);
+				mix[n].xmm[0] = _mm_xor_si128(xmm0, dag_node->xmm[0]);
+				mix[n].xmm[1] = _mm_xor_si128(xmm1, dag_node->xmm[1]);
+				mix[n].xmm[2] = _mm_xor_si128(xmm2, dag_node->xmm[2]);
+				mix[n].xmm[3] = _mm_xor_si128(xmm3, dag_node->xmm[3]);
+			}
+			#elif defined(__MIC__)
+			{
+				// __m512i implementation via union
+				//	Each vector register (zmm) can store sixteen 32-bit integer numbers
+				__m512i fnv_prime = _mm512_set1_epi32(FNV_PRIME);
+				__m512i zmm0 = _mm512_mullo_epi32(fnv_prime, mix[n].zmm[0]);
+				mix[n].zmm[0] = _mm512_xor_si512(zmm0, dag_node->zmm[0]);
+			}
+			#else
+			{
+				for (unsigned w = 0; w != NODE_WORDS; ++w) {
+					mix[n].words[w] = fnv_hash(mix[n].words[w], dag_node->words[w]);
+				}
+			}
+#endif
+		}
+
+	}
+
+#if defined(__GNUC__) && (__GNUC__ < 5)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Warray-bounds"
+#endif // define (__GNUC__)
+
+	// compress mix
+	for (uint32_t w = 0; w != MIX_WORDS; w += 4) {
+		uint32_t reduction = mix->words[w + 0];
+		reduction = reduction * FNV_PRIME ^ mix->words[w + 1];
+		reduction = reduction * FNV_PRIME ^ mix->words[w + 2];
+		reduction = reduction * FNV_PRIME ^ mix->words[w + 3];
+		mix->words[w / 4] = reduction;
+	}
+
+#if defined(__GNUC__) && (__GNUC__ < 5)
+#pragma GCC diagnostic pop
+#endif // define (__GNUC__)
+
+	fix_endian_arr32(mix->words, MIX_WORDS / 4);
+	memcpy(&ret->mix_hash, mix->bytes, 32);
+	// final Keccak hash
+	SHA3_256_96(&ret->result, s_mix->bytes); // Keccak-256(s + compressed_mix)
+	return true;
+}
+
 
 void ethash_quick_hash(
 	ethash_h256_t* return_hash,
@@ -304,9 +402,9 @@ void ethash_quick_hash(
 	memcpy(buf, header_hash, 32);
 	fix_endian64_same(nonce);
 	memcpy(&(buf[32]), &nonce, 8);
-	SHA3_512(buf, buf, 40);
+	SHA3_512_40(buf, buf);
 	memcpy(&(buf[64]), mix_hash, 32);
-	SHA3_256(return_hash, buf, 64 + 32);
+	SHA3_256_96(return_hash, buf);
 }
 
 ethash_h256_t ethash_get_seedhash(uint64_t block_number)
@@ -315,7 +413,7 @@ ethash_h256_t ethash_get_seedhash(uint64_t block_number)
 	ethash_h256_reset(&ret);
 	uint64_t const epochs = block_number / ETHASH_EPOCH_LENGTH;
 	for (uint32_t i = 0; i < epochs; ++i)
-		SHA3_256(&ret, (uint8_t*)&ret, 32);
+		SHA3_256_32(&ret, (uint8_t*)&ret);
 	return ret;
 }
 
@@ -391,7 +489,7 @@ ethash_return_value_t ethash_light_compute_internal(
 {
   	ethash_return_value_t ret;
 	ret.success = true;
-	if (!ethash_hash(&ret, NULL, light, full_size, header_hash, nonce)) {
+	if (!ethash_hash_nonode(&ret, light, full_size, header_hash, nonce)) {
 		ret.success = false;
 	}
 	return ret;
@@ -553,7 +651,6 @@ ethash_return_value_t ethash_full_compute(
 	if (!ethash_hash(
 		&ret,
 		(node const*)full->data,
-		NULL,
 		full->file_size,
 		header_hash,
 		nonce)) {
