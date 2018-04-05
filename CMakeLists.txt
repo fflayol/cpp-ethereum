@@ -51,39 +51,23 @@ set(CMAKE_MAP_IMPORTED_CONFIG_RELWITHDEBINFO Release)
 set(HUNTER_CONFIGURATION_TYPES Release)
 set(HUNTER_JOBS_NUMBER 4)
 set(HUNTER_CACHE_SERVERS "https://github.com/ethereum/hunter-cache")
+set(HUNTER_PASSWORDS_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake/Hunter/passwords.cmake)
+
+# In CI builds upload the binaries if the GITHUB_USER_PASSWORD was decrypted
+# (only for branches and internal PRs).
+if("$ENV{CI}" AND NOT "$ENV{GITHUB_USER_PASSWORD}" STREQUAL "")
+    set(run_upload YES)
+else()
+    set(run_upload NO)
+endif()
+option(HUNTER_RUN_UPLOAD "Upload binaries to the cache server" ${run_upload})
+
 include(HunterGate)
 HunterGate(
-    URL "https://github.com/ruslo/hunter/archive/v0.19.173.tar.gz"
-    SHA1 "750fb1d621af971fad6f303356b13017ad9f5e15"
+    URL "https://github.com/ruslo/hunter/archive/v0.20.9.tar.gz"
+    SHA1 "8f7cf6d719d05c49224a4ebeba90c6bb90b90f4a"
     LOCAL
 )
-
-if(HUNTER_ENABLED)
-    # Find Python executable,
-    # prefer version 3 that has requests module included.
-    set(Python_ADDITIONAL_VERSIONS 3)
-    find_package(PythonInterp)
-    if(PYTHONINTERP_FOUND)
-        hunter_gate_self(
-            "${HUNTER_CACHED_ROOT}"
-            "${HUNTER_VERSION}"
-            "${HUNTER_SHA1}"
-            hunter_dir
-        )
-        set(hunter_upload_script "${hunter_dir}/maintenance/upload-cache-to-github.py")
-        set(hunter_cache_dir "${HUNTER_GATE_ROOT}/_Base/Cache")
-        set(hunter_tmp_dir "${HUNTER_GATE_ROOT}/tmp")
-        add_custom_target(
-            hunter_upload_cache
-            ${PYTHON_EXECUTABLE} ${hunter_upload_script}
-            --username hunter-cache-bot
-            --repo-owner ethereum
-            --repo hunter-cache
-            --cache-dir ${hunter_cache_dir}
-            --temp-dir ${hunter_tmp_dir}
-        )
-    endif()
-endif()
 
 # project name and version should be set after cmake_policy CMP0048
 project(cpp-ethereum VERSION "1.3.0")
@@ -103,8 +87,8 @@ include(EthUtils)
 
 set(Boost_USE_STATIC_LIBS ON)
 set(Boost_USE_MULTITHREADED ON)
-hunter_add_package(Boost COMPONENTS program_options filesystem system thread)
-find_package(Boost CONFIG REQUIRED program_options filesystem system thread)
+hunter_add_package(Boost COMPONENTS program_options filesystem system thread context fiber)
+find_package(Boost CONFIG REQUIRED program_options filesystem system thread context fiber)
 
 hunter_add_package(jsoncpp)
 find_package(jsoncpp CONFIG REQUIRED)
@@ -117,6 +101,9 @@ find_package(cryptopp CONFIG REQUIRED)
 
 hunter_add_package(libjson-rpc-cpp)
 find_package(libjson-rpc-cpp CONFIG REQUIRED)
+
+hunter_add_package(libscrypt)
+find_package(libscrypt CONFIG REQUIRED)
 
 include(ProjectSecp256k1)
 include(ProjectLibFF)
@@ -171,6 +158,3 @@ if (TESTS)
     enable_testing()
     add_subdirectory(test)
 endif()
-
-# TODO: Split out json_spirit, libscrypt and sec256k1.
-add_subdirectory(utils)

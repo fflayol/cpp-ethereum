@@ -26,19 +26,8 @@ namespace
 
 static_assert(sizeof(Address) == sizeof(evm_address), "Address types size mismatch");
 static_assert(alignof(Address) == alignof(evm_address), "Address types alignment mismatch");
-
-inline Address fromEvmC(evm_address const& _addr)
-{
-	return reinterpret_cast<Address const&>(_addr);
-}
-
 static_assert(sizeof(h256) == sizeof(evm_uint256be), "Hash types size mismatch");
 static_assert(alignof(h256) == alignof(evm_uint256be), "Hash types alignment mismatch");
-
-inline u256 fromEvmC(evm_uint256be const& _n)
-{
-	return fromBigEndian<u256>(_n.bytes);
-}
 
 int accountExists(evm_context* _context, evm_address const* _addr) noexcept
 {
@@ -89,17 +78,27 @@ void getBalance(
 	*o_result = toEvmC(env.balance(fromEvmC(*_addr)));
 }
 
-size_t getCode(byte const** o_code, evm_context* _context, evm_address const* _addr)
+size_t getCodeSize(evm_context* _context, evm_address const* _addr)
 {
-	auto& env = static_cast<ExtVMFace&>(*_context);
-	Address addr = fromEvmC(*_addr);
-	if (o_code != nullptr)
-	{
-		auto& code = env.codeAt(addr);
-		*o_code = code.data();
-		return code.size();
-	}
-	return env.codeSizeAt(addr);
+    auto& env = static_cast<ExtVMFace&>(*_context);
+    return env.codeSizeAt(fromEvmC(*_addr));
+}
+
+size_t copyCode(evm_context* _context, evm_address const* _addr, size_t _codeOffset,
+    byte* _bufferData, size_t _bufferSize)
+{
+    auto& env = static_cast<ExtVMFace&>(*_context);
+    Address addr = fromEvmC(*_addr);
+    bytes const& code = env.codeAt(addr);
+
+    // Handle "big offset" edge case.
+    if (_codeOffset >= code.size())
+        return 0;
+
+    size_t maxToCopy = code.size() - _codeOffset;
+    size_t numToCopy = std::min(maxToCopy, _bufferSize);
+    std::copy_n(&code[_codeOffset], numToCopy, _bufferData);
+    return numToCopy;
 }
 
 void selfdestruct(
@@ -174,7 +173,8 @@ void create(evm_result* o_result, ExtVMFace& _env, evm_message const* _msg) noex
 	}
 	else
 	{
-		o_result->status_code = EVM_REVERT;
+		// FIXME: detect and support revert properly
+		o_result->status_code = EVM_FAILURE;
 
 		// Pass the output to the EVM without a copy. The EVM will delete it
 		// when finished with it.
@@ -229,7 +229,9 @@ void call(evm_result* o_result, evm_context* _context, evm_message const* _msg) 
 	// In first case we want to keep the output, in the second one the output
 	// is optional and should not be passed to the contract, but can be useful
 	// for EVM in general.
-	o_result->status_code = success ? EVM_SUCCESS : EVM_REVERT;
+	//
+	// FIXME: detect and support revert properly
+	o_result->status_code = success ? EVM_SUCCESS : EVM_FAILURE;
 	o_result->gas_left = static_cast<int64_t>(params.gas);
 
 	// Pass the output to the EVM without a copy. The EVM will delete it
@@ -256,45 +258,36 @@ void call(evm_result* o_result, evm_context* _context, evm_message const* _msg) 
 }
 
 evm_context_fn_table const fnTable = {
-	accountExists,
-	getStorage,
-	setStorage,
-	getBalance,
-	getCode,
-	selfdestruct,
-	eth::call,
-	getTxContext,
-	getBlockHash,
-	eth::log
+    accountExists,
+    getStorage,
+    setStorage,
+    getBalance,
+    getCodeSize,
+    copyCode,
+    selfdestruct,
+    eth::call,
+    getTxContext,
+    getBlockHash,
+    eth::log,
 };
-
 }
 
-ExtVMFace::ExtVMFace(
-	EnvInfo const& _envInfo,
-	Address _myAddress,
-	Address _caller,
-	Address _origin,
-	u256 _value,
-	u256 _gasPrice,
-	bytesConstRef _data,
-	bytes _code,
-	h256 const& _codeHash,
-	unsigned _depth,
-	bool _staticCall
-):
-	evm_context{&fnTable},
-	m_envInfo(_envInfo),
-	myAddress(_myAddress),
-	caller(_caller),
-	origin(_origin),
-	value(_value),
-	gasPrice(_gasPrice),
-	data(_data),
-	code(std::move(_code)),
-	codeHash(_codeHash),
-	depth(_depth),
-	staticCall(_staticCall)
+ExtVMFace::ExtVMFace(EnvInfo const& _envInfo, Address _myAddress, Address _caller, Address _origin,
+    u256 _value, u256 _gasPrice, bytesConstRef _data, bytes _code, h256 const& _codeHash,
+    unsigned _depth, bool _isCreate, bool _staticCall)
+  : evm_context{&fnTable},
+    m_envInfo(_envInfo),
+    myAddress(_myAddress),
+    caller(_caller),
+    origin(_origin),
+    value(_value),
+    gasPrice(_gasPrice),
+    data(_data),
+    code(std::move(_code)),
+    codeHash(_codeHash),
+    depth(_depth),
+    isCreate(_isCreate),
+    staticCall(_staticCall)
 {}
 
 }

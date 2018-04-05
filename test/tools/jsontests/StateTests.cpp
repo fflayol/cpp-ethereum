@@ -72,9 +72,9 @@ json_spirit::mValue StateTestSuite::doTests(json_spirit::mValue const& _input, b
 
 		ImportTest importer(inputTest, outputTest);
 		Listener::ExecTimeGuard guard{i.first};
-		importer.executeTest();
+        importer.executeTest(_fillin);
 
-		if (_fillin)
+        if (_fillin)
 		{
 #if ETH_FATDB
 			if (inputTest.count("_info"))
@@ -202,6 +202,9 @@ BOOST_AUTO_TEST_CASE(stZeroKnowledge){}
 BOOST_AUTO_TEST_CASE(stZeroKnowledge2){}
 BOOST_AUTO_TEST_CASE(stCodeCopyTest){}
 BOOST_AUTO_TEST_CASE(stBugs){}
+
+//Constantinople Tests
+BOOST_AUTO_TEST_CASE(stShift){}
 
 //Stress Tests
 BOOST_AUTO_TEST_CASE(stAttackTest){}
