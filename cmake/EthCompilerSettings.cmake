@@ -31,6 +31,8 @@ if (("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU") OR ("${CMAKE_CXX_COMPILER_ID}" MA
 	add_compile_options(-Wall)
 	add_compile_options(-Wextra)
 	add_compile_options(-Werror)
+        add_compile_options(-mtune=corei7)
+        add_compile_options(-msse4.2)
 
 	# Disable warnings about unknown pragmas (which is enabled by -Wall).
 	add_compile_options(-Wno-unknown-pragmas)
@@ -39,7 +41,7 @@ if (("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU") OR ("${CMAKE_CXX_COMPILER_ID}" MA
 	set(CMAKE_CXX_FLAGS_DEBUG          "-Og -g -DETH_DEBUG")
 	set(CMAKE_CXX_FLAGS_MINSIZEREL     "-Os -DNDEBUG")
 	set(CMAKE_CXX_FLAGS_RELEASE        "-O3 -DNDEBUG")
-	set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O2 -g")
+	set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g ")
 
 	option(USE_LD_GOLD "Use GNU gold linker" ON)
 	if (USE_LD_GOLD)
